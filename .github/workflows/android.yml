@@ -1,0 +1,143 @@
+name: Android
+
+# APK di tk-desk per Android. Build sulla CI perché Smart App Control sul PC blocca gli strumenti Dart.
+# Il push su main pubblica anche l'aggiornamento automatico su Dropbox (come le altre app TK) e crea il tag
+# v<versione> del codice sorgente. Sugli altri rami (avvio a mano) si prova e basta: niente Dropbox, niente tag,
+# in più le foto delle schermate (Benvenuto, Informazioni, Licenze) come artefatto.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-debug:
+    runs-on: ubuntu-latest
+    env:
+      APK_DIRECT_URL: https://dl.dropboxusercontent.com/scl/fi/ft1986xk80ezs7v0jsi3x/tkdesk.apk?rlkey=l9n7ovmuw59ctftt5q6466sgz
+      # a livello di job: l'if di un passo non vede le variabili definite dentro il passo stesso
+      HA_DROPBOX: ${{ secrets.DROPBOX_REFRESH_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.8'  # Dart 3.13.5, come chiede pubspec.yaml (sdk ^3.13.5)
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+      # foto delle schermate con i caratteri veri (solo sui rami di prova)
+      - name: Foto delle schermate
+        if: github.ref != 'refs/heads/main'
+        run: flutter test --update-goldens test/schermate_golden_test.dart
+      - uses: actions/upload-artifact@v4
+        if: github.ref != 'refs/heads/main'
+        continue-on-error: true
+        with:
+          name: tkdesk-foto
+          path: |
+            test/goldens/*.png
+            pubspec.lock
+          retention-days: 7
+
+      # chiave fissa di tk-desk dal segreto (base64): mai nel repo. Su main è obbligatoria, altrimenti i
+      # telefoni riceverebbero un APK con un'altra firma e non potrebbero aggiornare.
+      - name: Chiave di firma dal segreto
+        env:
+          CHIAVE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$CHIAVE_B64" ]; then
+            # il segreto può avere a capo o spazi: tolti prima di decodificare
+            printf '%s' "$CHIAVE_B64" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/tk.keystore"
+            echo "ANDROID_KEYSTORE=$RUNNER_TEMP/tk.keystore" >> "$GITHUB_ENV"
+            echo "Chiave di firma pronta"
+          elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            echo "::error::Segreto ANDROID_KEYSTORE_B64 mancante: su main non si pubblica un APK firmato con un'altra chiave"
+            exit 1
+          else
+            echo "Segreto assente: firma di debug di Flutter"
+          fi
+
+      # release con tutte le architetture (arm64, arm 32 bit, x86_64) come l'APK già sui telefoni: anche i telefoni
+      # a 32 bit continuano a ricevere gli aggiornamenti. Firmata con la chiave fissa.
+      - run: flutter build apk --release
+
+      - name: Controllo della firma
+        run: |
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs "$APK" | tee firma.txt
+          # riga «Signer #1 certificate SHA-256 digest: …» oppure «V2 Signer: certificate SHA-256 digest: …»
+          TROVATA=$(sed -n 's/.*certificate SHA-256 digest: *//p' firma.txt | head -1 | tr -d ': ' | tr 'A-F' 'a-f')
+          if [ -z "$TROVATA" ]; then echo "::error::Impronta dell'APK non trovata"; exit 1; fi
+          echo "Impronta SHA-256 del certificato dell'APK: $TROVATA"
+          if [ -n "${ANDROID_KEYSTORE:-}" ]; then
+            ATTESA=$(keytool -list -v -keystore "$ANDROID_KEYSTORE" -storepass android -alias androiddebugkey \
+              | grep -m1 'SHA256:' | awk '{print $2}' | tr -d ':' | tr 'A-F' 'a-f')
+            echo "Impronta SHA-256 del certificato della chiave: $ATTESA"
+            if [ "$ATTESA" != "$TROVATA" ]; then echo "::error::L'APK non è firmato con la chiave di tk-desk"; exit 1; fi
+            echo "Firma giusta: è la chiave di tk-desk"
+          fi
+
+      - name: Rinomina APK
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/tkdesk-${GITHUB_SHA::7}.apk"
+      # lo spazio artefatti dell'account si riempie: se fallisce, l'aggiornamento su Dropbox parte lo stesso
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: tkdesk-apk
+          path: dist/*.apk
+          retention-days: 7
+
+      - name: Carica auto-update su Dropbox
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.HA_DROPBOX == 'true'
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+        run: |
+          set -e
+          TOKEN=$(curl -s https://api.dropbox.com/oauth2/token \
+            -d grant_type=refresh_token -d refresh_token="$DROPBOX_REFRESH_TOKEN" \
+            -u "$DROPBOX_APP_KEY:$DROPBOX_APP_SECRET" | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+          VERSIONE=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' \r')
+          NOME=${VERSIONE%%+*}
+          CODICE=${VERSIONE##*+}
+          curl -s -X POST https://content.dropboxapi.com/2/files/upload \
+            --header "Authorization: Bearer $TOKEN" \
+            --header "Dropbox-API-Arg: {\"path\":\"/tkdesk.apk\",\"mode\":\"overwrite\"}" \
+            --header "Content-Type: application/octet-stream" \
+            --data-binary @build/app/outputs/flutter-apk/app-release.apk > /dev/null
+          printf '{"versionCode":%s,"versionName":"%s","apkUrl":"%s","note":"%s"}' \
+            "$CODICE" "$NOME" "$APK_DIRECT_URL" "$(git log -1 --pretty=%s | tr -d '"')" > tkdesk-version.json
+          curl -s -X POST https://content.dropboxapi.com/2/files/upload \
+            --header "Authorization: Bearer $TOKEN" \
+            --header "Dropbox-API-Arg: {\"path\":\"/tkdesk-version.json\",\"mode\":\"overwrite\"}" \
+            --header "Content-Type: application/octet-stream" \
+            --data-binary @tkdesk-version.json > /dev/null
+          echo "Pubblicato $NOME ($CODICE) su Dropbox"
+
+      # tag del codice sorgente di questa versione (link «Codice sorgente» nell'app: /tree/v<versione>)
+      - name: Tag della versione
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.HA_DROPBOX == 'true'
+        run: |
+          VERSIONE=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' \r')
+          NOME=${VERSIONE%%+*}
+          if git ls-remote --exit-code --tags origin "refs/tags/v$NOME" > /dev/null; then
+            echo "Il tag v$NOME c'è già"
+          else
+            git tag "v$NOME"
+            git push origin "v$NOME"
+            echo "Creato il tag v$NOME"
+          fi
