@@ -6,6 +6,7 @@
 // Copyright (C) 2026 Pietro De Filippis (TecnikGeek) — AGPL-3.0-or-later, vedi COPYING
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show Random;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -15,6 +16,7 @@ import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'tk_pro.dart';
@@ -1245,13 +1247,43 @@ class Novita {
   final String note;
 }
 
+/// «; <codice>» per il manifest: codice casuale creato una volta e conservato sul telefono, così un'installazione
+/// conta una volta sola anche se cambia rete (Privacy 4-ter). Non dice chi sei né che telefono è, ed è diverso
+/// dal codice delle statistiche.
+Future<String> _codiceConteggio() async {
+  try {
+    final p = await SharedPreferences.getInstance();
+    var c = p.getString('tk_codice_conteggio') ?? '';
+    if (!RegExp(r'^[a-f0-9]{16}$').hasMatch(c)) {
+      final r = Random.secure();
+      c = List.generate(16, (_) => r.nextInt(16).toRadixString(16)).join();
+      await p.setString('tk_codice_conteggio', c);
+    }
+    return '; $c';
+  } catch (_) {
+    return '';
+  }
+}
+
 /// Controlla se c'è una versione più nuova. Ritorna null se è già aggiornata.
 Future<Novita?> cercaNovita() async {
   final info = await PackageInfo.fromPlatform();
   final attuale = int.tryParse(info.buildNumber) ?? 0;
-  // &t= per non farsi servire il manifesto vecchio dalla cache
-  final risposta = await http
-      .get(Uri.parse('${configTk.manifestUrl}&t=${DateTime.now().millisecondsSinceEpoch}'))
+  final t = DateTime.now().millisecondsSinceEpoch; // per non farsi servire il manifesto vecchio dalla cache
+  http.Response? risposta;
+  // prima dal sito: stesso manifesto (lo legge da Dropbox) e conta le installazioni attive con un codice anonimo
+  // (hash dell'indirizzo, vedi Privacy 4-ter); se il sito non risponde, direttamente da Dropbox
+  final nome = RegExp(r'/([a-z]+)-version\.json').firstMatch(configTk.manifestUrl)?.group(1);
+  if (nome != null) {
+    try {
+      final r = await http.get(Uri.parse('https://pietrodefilippis.it/updates/app/$nome.json?t=$t'),
+          headers: {'User-Agent': 'tk-app/${info.version} (android${await _codiceConteggio()})'})
+          .timeout(const Duration(seconds: 10));
+      if (r.statusCode == 200) risposta = r;
+    } catch (_) {}
+  }
+  risposta ??= await http
+      .get(Uri.parse('${configTk.manifestUrl}&t=$t'))
       .timeout(const Duration(seconds: 20));
   if (risposta.statusCode != 200) throw 'Il server ha risposto ${risposta.statusCode}';
   final dati = jsonDecode(risposta.body) as Map<String, dynamic>;
