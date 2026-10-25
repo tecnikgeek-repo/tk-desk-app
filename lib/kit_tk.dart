@@ -937,13 +937,13 @@ class _SchedaInfo extends StatelessWidget {
           for (final r in righe)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 3),
-              child: Row(children: [
+              // valori lunghi («cassaforte del telefono») vanno a capo, allineati a destra: mai tagliati coi puntini
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(r.$1, style: const TextStyle(color: grigio300, fontSize: 14)),
                 const SizedBox(width: 12),
                 Expanded(
                     child: Text(r.$2,
                         textAlign: TextAlign.right,
-                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(color: bianco, fontSize: 14, fontWeight: FontWeight.w600))),
               ]),
             ),
