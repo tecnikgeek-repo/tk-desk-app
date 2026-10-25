@@ -1247,10 +1247,14 @@ class Novita {
   final String note;
 }
 
+// una sola volta per avvio: due controlli quasi insieme al primo avvio creerebbero due codici diversi
+Future<String>? _codiceInCorso;
 /// `; codice` per il manifest: codice casuale creato una volta e conservato sul telefono, così un'installazione
 /// conta una volta sola anche se cambia rete (Privacy 4-ter). Non dice chi sei né che telefono è, ed è diverso
 /// dal codice delle statistiche.
-Future<String> _codiceConteggio() async {
+Future<String> _codiceConteggio() => _codiceInCorso ??= _creaCodiceConteggio();
+
+Future<String> _creaCodiceConteggio() async {
   try {
     final p = await SharedPreferences.getInstance();
     var c = p.getString('tk_codice_conteggio') ?? '';
