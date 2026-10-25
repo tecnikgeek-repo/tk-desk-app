@@ -1247,7 +1247,7 @@ class Novita {
   final String note;
 }
 
-/// «; <codice>» per il manifest: codice casuale creato una volta e conservato sul telefono, così un'installazione
+/// `; codice` per il manifest: codice casuale creato una volta e conservato sul telefono, così un'installazione
 /// conta una volta sola anche se cambia rete (Privacy 4-ter). Non dice chi sei né che telefono è, ed è diverso
 /// dal codice delle statistiche.
 Future<String> _codiceConteggio() async {
