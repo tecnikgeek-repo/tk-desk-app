@@ -1024,13 +1024,8 @@ class _SchermataLicenzeState extends State<SchermataLicenze> {
                   icona: Icons.list_alt,
                   chiaro: true,
                   scuro: true,
-                  onTap: () => showLicensePage(
-                        context: context,
-                        applicationName: c.nome,
-                        applicationVersion: widget.versione,
-                        applicationIcon: const Padding(padding: EdgeInsets.all(8), child: LogoTk(lato: 56)),
-                        applicationLegalese: '© 2026 $autoreTk — GNU AGPL-3.0',
-                      )),
+                  onTap: () => Navigator.of(context)
+                      .push(MaterialPageRoute<void>(builder: (_) => const SchermataComponenti()))),
               const SizedBox(height: 10),
               BottoneTk(
                   testo: 'Apri il codice sorgente',
@@ -1046,30 +1041,197 @@ class _SchermataLicenzeState extends State<SchermataLicenze> {
   }
 }
 
-/// Testo intero della GNU AGPL-3.0 (asset dell'app).
+/// Testo intero della GNU AGPL-3.0 (asset dell'app), a paragrafi che si adattano allo schermo.
 class _TestoLicenza extends StatelessWidget {
   const _TestoLicenza();
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<String>(
+        future: rootBundle.loadString(assetAgpl),
+        builder: (_, s) => s.connectionState != ConnectionState.done
+            ? const _PaginaLicenze(titolo: 'GNU AGPL-3.0', corpo: _Attesa())
+            : TestoLicenze(
+                titolo: 'GNU AGPL-3.0',
+                sopra: 'Il testo ufficiale è in inglese.',
+                voci: [
+                  if (s.data != null) LicenseEntryWithLineBreaks(const ['GNU AGPL-3.0'], s.data!),
+                ],
+                vuoto: 'Testo della licenza non trovato: lo trovi su $urlAgpl'),
+      );
+}
+
+/// Pagina navy con la testata delle app: la base di «Licenze dei componenti» e dei testi delle licenze.
+class _PaginaLicenze extends StatelessWidget {
+  const _PaginaLicenze({required this.titolo, required this.corpo});
+
+  final String titolo;
+  final Widget corpo;
 
   @override
   Widget build(BuildContext context) => Scaffold(
         backgroundColor: navy,
         body: Column(children: [
-          TestataSemplice(titolo: 'GNU AGPL-3.0', indietro: () => Navigator.of(context).pop()),
-          Expanded(
-            child: FutureBuilder<String>(
-              future: rootBundle.loadString(assetAgpl),
-              builder: (_, s) => s.connectionState != ConnectionState.done
-                  ? const Center(child: CircularProgressIndicator())
-                  : SingleChildScrollView(
-                      padding: EdgeInsets.fromLTRB(16, 16, 16, 20 + MediaQuery.of(context).padding.bottom),
-                      child: SelectableText(
-                          s.data ?? 'Testo della licenza non trovato: lo trovi su $urlAgpl',
-                          style: const TextStyle(color: grigio200, fontSize: 12.5, height: 1.45)),
-                    ),
-            ),
-          ),
+          TestataSemplice(titolo: titolo, indietro: () => Navigator.of(context).pop()),
+          Expanded(child: corpo),
         ]),
       );
+}
+
+class _Attesa extends StatelessWidget {
+  const _Attesa();
+
+  @override
+  Widget build(BuildContext context) => Center(child: CircularProgressIndicator(color: configTk.accento));
+}
+
+/// Informazioni → Licenze → «Licenze dei componenti»: le librerie dentro l'app (LicenseRegistry, come la pagina
+/// di Flutter) in schede navy2; toccandone una si legge la sua licenza.
+class SchermataComponenti extends StatefulWidget {
+  const SchermataComponenti({super.key});
+
+  @override
+  State<SchermataComponenti> createState() => _SchermataComponentiState();
+}
+
+class _SchermataComponentiState extends State<SchermataComponenti> {
+  late final Future<List<(String, List<LicenseEntry>)>> _componenti = _carica();
+
+  static Future<List<(String, List<LicenseEntry>)>> _carica() async {
+    registraLicenzaAgpl();
+    final per = <String, List<LicenseEntry>>{};
+    await for (final e in LicenseRegistry.licenses) {
+      for (final p in e.packages) {
+        (per[p] ??= []).add(e);
+      }
+    }
+    final nomi = per.keys.toList()
+      ..sort((a, b) {
+        // l'app per prima, poi in ordine alfabetico
+        if (a == configTk.nome) return -1;
+        if (b == configTk.nome) return 1;
+        return a.toLowerCase().compareTo(b.toLowerCase());
+      });
+    return [for (final n in nomi) (n, per[n]!)];
+  }
+
+  @override
+  Widget build(BuildContext context) => _PaginaLicenze(
+        titolo: 'Licenze dei componenti',
+        corpo: FutureBuilder<List<(String, List<LicenseEntry>)>>(
+          future: _componenti,
+          builder: (_, s) {
+            if (s.connectionState != ConnectionState.done) return const _Attesa();
+            final lista = s.data ?? const [];
+            return ListView.builder(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 20 + MediaQuery.of(context).padding.bottom),
+              itemCount: lista.length + 1,
+              itemBuilder: (_, i) {
+                if (i == 0) {
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 14),
+                    child: Text(
+                        '${configTk.nome} usa ${lista.length} componenti liberi. Tocca un nome per leggerne la licenza '
+                        '(i testi ufficiali sono in inglese).',
+                        style: const TextStyle(color: grigio300, fontSize: 13.5, height: 1.45)),
+                  );
+                }
+                final (nome, voci) = lista[i - 1];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Material(
+                    color: navy2,
+                    borderRadius: BorderRadius.circular(14),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) => TestoLicenze(titolo: nome, voci: voci))),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 13, 10, 13),
+                        child: Row(children: [
+                          Expanded(
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(nome,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: bianco, fontSize: 15, fontWeight: FontWeight.w700)),
+                              const SizedBox(height: 2),
+                              Text(voci.length == 1 ? '1 licenza' : '${voci.length} licenze',
+                                  style: const TextStyle(color: grigio400, fontSize: 12.5)),
+                            ]),
+                          ),
+                          const Icon(Icons.chevron_right, color: grigio400),
+                        ]),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      );
+}
+
+/// Testo di una o più licenze, paragrafo per paragrafo (rientri e righe centrate come nell'originale), ogni licenza
+/// in una scheda navy2; si può selezionare e copiare.
+class TestoLicenze extends StatelessWidget {
+  const TestoLicenze({super.key, required this.titolo, required this.voci, this.sopra, this.vuoto = 'Nessun testo.'});
+
+  final String titolo;
+  final List<LicenseEntry> voci;
+  final String? sopra;
+  final String vuoto;
+
+  @override
+  Widget build(BuildContext context) {
+    // una riga della lista per paragrafo: anche i testi lunghissimi scorrono leggeri
+    final righe = <LicenseParagraph?>[];
+    for (final v in voci) {
+      righe.addAll(v.paragraphs);
+      if (righe.isNotEmpty && righe.last != null) righe.add(null); // null = fine della scheda
+    }
+    const stile = TextStyle(color: grigio200, fontSize: 13.5, height: 1.5);
+    return _PaginaLicenze(
+      titolo: titolo,
+      corpo: righe.isEmpty
+          ? Center(child: Text(vuoto, style: const TextStyle(color: grigio300)))
+          : SelectionArea(
+              child: ListView.builder(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 20 + MediaQuery.of(context).padding.bottom),
+                itemCount: righe.length + (sopra == null ? 0 : 1),
+                itemBuilder: (_, n) {
+                  if (sopra != null && n == 0) {
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
+                      child: Text(sopra!, style: const TextStyle(color: grigio400, fontSize: 12.5)),
+                    );
+                  }
+                  final i = sopra == null ? n : n - 1;
+                  final p = righe[i];
+                  final primo = i == 0 || righe[i - 1] == null;
+                  final r = BorderRadius.vertical(
+                      top: Radius.circular(primo ? 14 : 0), bottom: Radius.circular(p == null ? 14 : 0));
+                  if (p == null) {
+                    return Container(
+                      height: 16,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(color: navy2, borderRadius: r),
+                    );
+                  }
+                  final centrato = p.indent == LicenseParagraph.centeredIndent;
+                  return Container(
+                    decoration: BoxDecoration(color: navy2, borderRadius: r),
+                    padding: EdgeInsets.fromLTRB(
+                        16 + (centrato ? 0 : 14.0 * p.indent.clamp(0, 6)), primo ? 16 : 10, 16, 0),
+                    child: Text(p.text,
+                        textAlign: centrato ? TextAlign.center : TextAlign.start,
+                        style: centrato ? stile.copyWith(color: bianco, fontWeight: FontWeight.w700) : stile),
+                  );
+                },
+              ),
+            ),
+    );
+  }
 }
 
 // ───────────────────────── aggiornamenti (Android) ─────────────────────────
