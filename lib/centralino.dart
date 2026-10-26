@@ -1,7 +1,8 @@
 // Centralino di tk-desk (tk-license-server /desk/*): ID del telefono e messaggi per far conoscere i due dispositivi.
-// Identico al programma per computer (tkdesk/centralino.py): stessa chiave dalla password (PBKDF2-SHA256, 50.000 giri,
-// sale «tk-desk|<ID del computer>») e stessa firma HMAC dell'offerta e della risposta WebRTC. Il server non vede né la
-// password né lo schermo.
+// Identico al programma per computer (tkdesk/centralino.py): stessa chiave dalla password (PBKDF2-SHA256, 600.000 giri,
+// sale «tk-desk-v2|<ID del computer>»), che entra in SPAKE2 (pake.dart, protocollo 3): il server non vede né la
+// password né lo schermo, e dai suoi messaggi la password non si ricava. Le versioni di prima (firma HMAC) non si
+// collegano più: il centralino le rifiuta.
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -11,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 const serverDesk = 'https://pietrodefilippis.it/wp-json/tk-license/v1/desk';
+const protocollo = 3; // SPAKE2: il centralino rifiuta chi ne dichiara uno più vecchio
 
 class ErroreCentralino implements Exception {
   ErroreCentralino(this.messaggio, [this.codice = '']);
@@ -34,16 +36,10 @@ String _normalizza(String password) {
   return pw;
 }
 
-/// Chiave v1 (50.000 giri, campo «prova»): solo per parlare con le tk-desk per computer di prima della 1.1.0.
-Future<List<int>> chiaveDa(String password, String idControllato) async {
-  final k = await Pbkdf2(macAlgorithm: Hmac.sha256(), iterations: 50000, bits: 256).deriveKey(
-    secretKey: SecretKey(utf8.encode(_normalizza(password))),
-    nonce: utf8.encode('tk-desk|$idControllato'),
-  );
-  return k.extractBytes();
-}
+/// La monouso ha 6 cifre, la fissa almeno 8 caratteri: chi chiama dice quale delle due sta usando.
+bool eFissa(String password) => password.trim().replaceAll(' ', '').length > 6;
 
-/// Chiave v2 (600.000 giri, campo «prova2»), come tk-desk per computer dalla 1.1.0 (centralino.chiave2).
+/// Chiave della password per SPAKE2 (600.000 giri), come tk-desk per computer (centralino.chiave2).
 Future<List<int>> chiaveDa2(String password, String idControllato) async {
   final k = await Pbkdf2(macAlgorithm: Hmac.sha256(), iterations: 600000, bits: 256).deriveKey(
     secretKey: SecretKey(utf8.encode(_normalizza(password))),
@@ -52,24 +48,8 @@ Future<List<int>> chiaveDa2(String password, String idControllato) async {
   return k.extractBytes();
 }
 
-Future<String> firma(List<int> chiave, String tipo, String da, String a, String nonce, String sdp) async {
-  final impronta = _hex((await Sha256().hash(utf8.encode(sdp))).bytes);
-  final mac = await Hmac.sha256()
-      .calculateMac(utf8.encode('tk-desk-$tipo|$da|$a|$nonce|$impronta'), secretKey: SecretKey(chiave));
-  return _hex(mac.bytes);
-}
-
-Future<bool> firmaValida(List<int> chiave, String tipo, String da, String a, String nonce, String sdp, String prova) async {
-  final attesa = await firma(chiave, tipo, da, a, nonce, sdp);
-  if (attesa.length != prova.length) return false;
-  var diff = 0;
-  for (var i = 0; i < attesa.length; i++) {
-    diff |= attesa.codeUnitAt(i) ^ prova.codeUnitAt(i);
-  }
-  return diff == 0;
-}
-
-String nuovoNonce() => _casuale(16);
+/// Codice di una chiamata: il computer lo ripete nelle risposte (un rifiuto in ritardo non si confonde).
+String nuovoCodice() => _casuale(8);
 
 class Messaggio {
   Messaggio(this.da, this.tipo, this.dati);
@@ -128,6 +108,7 @@ class Centralino {
       'nome': nome,
       'piattaforma': Platform.isIOS ? 'ios' : 'android',
       'versione': versione,
+      'protocollo': protocollo,
     });
     id = j['id'].toString();
     final p = await SharedPreferences.getInstance();

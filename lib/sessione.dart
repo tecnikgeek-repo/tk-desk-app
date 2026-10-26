@@ -1,5 +1,6 @@
 // Sessione tk-desk dal telefono (chi CONTROLLA): stessa sequenza del programma per computer (tkdesk/sessione.py).
-// Offerta WebRTC firmata con la chiave della password → centralino → risposta firmata dal computer → collegamento
+// Stretta di mano SPAKE2 dal centralino (protocollo 3): chiamata → sfida (conferma del computer: se è sbagliata, la
+// password è sbagliata) → offerta WebRTC sigillata con la chiave della sessione → risposta sigillata → collegamento
 // diretto e cifrato. Canale dati «tk» con gli stessi messaggi JSON (mm, mb, mw, k, c, schermo, chat, appunti, fine…).
 import 'dart:async';
 import 'dart:convert';
@@ -10,6 +11,7 @@ import 'package:flutter/painting.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import 'centralino.dart';
+import 'pake.dart';
 
 const _stun = [
   {'urls': 'stun:stun.l.google.com:19302'},
@@ -17,6 +19,7 @@ const _stun = [
 ];
 
 String _motivoRifiuto(Map<String, dynamic> d) {
+  if (d['v'] != protocollo) return "Su quel computer c'è una versione vecchia di tk-desk: va aggiornata.";
   final minuti = (((d['attesa'] as num?)?.toInt() ?? 60) / 60).round().clamp(1, 999);
   switch (d['motivo']) {
     case 'password':
@@ -27,8 +30,10 @@ String _motivoRifiuto(Map<String, dynamic> d) {
       return 'Quel computer è già in una sessione con qualcun altro.';
     case 'rifiutato':
       return "L'altra persona non ha accettato il collegamento (o non ha risposto in 30 secondi).";
-    case 'serve-pro':
-      return "Su quel computer c'è una versione vecchia di tk-desk: per entrare con la password fissa va aggiornata.";
+    case 'manomesso':
+      return 'Il collegamento è stato alterato per strada: interrotto per sicurezza.';
+    case 'aggiorna':
+      return 'Questa versione di tk-desk non si collega più: aggiornala.';
   }
   return 'Collegamento rifiutato.';
 }
@@ -145,53 +150,55 @@ class SessioneDesk extends ChangeNotifier {
     final offerta = (await pc.getLocalDescription())!.sdp!;
     _passo('offerta pronta: ${RegExp('a=candidate').allMatches(offerta).length} indirizzi');
 
-    // prima la prova nuova (tk-desk per computer 1.1+, 600.000 giri); se il computer è di prima e dice «password»
-    // senza «v»: 2, si riprova con la prova vecchia (50.000 giri)
-    Messaggio? risposta;
-    List<int> chiave = const [];
-    String nonce = '', campo = 'prova2';
-    for (final versione in const [2, 1]) {
-      _stato(versione == 2 ? 'Preparo la chiamata…' : 'Il computer ha tk-desk di prima: riprovo…');
-      chiave = versione == 2 ? await chiaveDa2(password, idRemoto) : await chiaveDa(password, idRemoto);
-      nonce = nuovoNonce();
-      campo = versione == 2 ? 'prova2' : 'prova';
-      await ce.invia(idRemoto, 'chiamata', {
+    _stato('Preparo la chiamata…');
+    final sp = Spake2('A', ce.id, idRemoto, await chiaveDa2(password, idRemoto));
+    final n = nuovoCodice();
+    await ce.invia(idRemoto, 'chiamata', {'v': protocollo, 'n': n, 'p': sp.messaggio(), 'fissa': eFissa(password)});
+    _stato("Chiamo il computer… Dall'altra parte devono premere «Accetta».");
+    const nonRisponde = "Il computer non risponde: controlla che tk-desk sia aperto e che l'altra persona abbia "
+        'premuto «Accetta».';
+    var m = await _prendi(n, 30);
+    if (chiusa != null) return;
+    if (m == null) return _chiudi(nonRisponde);
+    _passo('dal computer: ${m.tipo} ${m.dati['motivo'] ?? ''} v${m.dati['v'] ?? '?'}');
+    if (m.tipo == 'sfida') {
+      var giusta = false;
+      try {
+        await sp.finisci((m.dati['p'] ?? '').toString());
+        giusta = sp.confermaValida(m.dati['c']?.toString());
+      } on ErrorePake {
+        giusta = false;
+      }
+      if (!giusta) {
+        await ce.invia(idRemoto, 'offerta', {'n': n, 'c': ''}); // il computer conta il tentativo subito
+        return _chiudi('Password sbagliata.');
+      }
+      final corpo = jsonEncode({
         'sdp': offerta,
-        'nonce': nonce,
-        campo: await firma(chiave, 'chiamata', ce.id, idRemoto, nonce, offerta),
         'nome': ce.nome,
         'piattaforma': Platform.isIOS ? 'ios' : 'android',
         'versione': ce.versione,
-        // campo del protocollo, non un Pro: le tk-desk per computer di prima della 1.1.0 lo chiedevano per la
-        // password fissa (altrimenti «serve-pro»). Sempre vero: tutte le funzioni sono per tutti.
-        'pro': true,
       });
-      _stato("Chiamo il computer… Dall'altra parte devono premere «Accetta».");
+      await ce.invia(idRemoto, 'offerta', {'n': n, 'c': sp.conferma(), 'corpo': corpo, 'sigillo': await sp.sigilla('offerta', corpo)});
       // risposta (o rifiuto): fino a 50 secondi (30 per «Accetta» sul computer + margine)
-      risposta = null;
-      final limite = DateTime.now().add(const Duration(seconds: 50));
-      while (risposta == null && chiusa == null && DateTime.now().isBefore(limite)) {
-        for (final m in await ce.ricevi()) {
-          if (m.da == idRemoto && (m.tipo == 'risposta' || m.tipo == 'rifiuto')) risposta = m;
-        }
-        if (risposta == null) await Future<void>.delayed(const Duration(milliseconds: 600));
-      }
+      m = await _prendi(n, 50);
       if (chiusa != null) return;
-      if (risposta == null) {
-        return _chiudi("Il computer non risponde: controlla che tk-desk sia aperto e che l'altra persona abbia "
-            'premuto «Accetta».');
-      }
-      _passo('dal computer: ${risposta.tipo} ${risposta.dati['motivo'] ?? ''} v${risposta.dati['v'] ?? 1}');
-      final vecchio = risposta.dati['v'] != 2;
-      if (!(risposta.tipo == 'rifiuto' && risposta.dati['motivo'] == 'password' && vecchio && versione == 2)) break;
+      if (m == null) return _chiudi(nonRisponde);
+      _passo('dal computer: ${m.tipo} ${m.dati['motivo'] ?? ''}');
     }
-    if (risposta == null) return;
-    if (risposta.tipo == 'rifiuto') return _chiudi(_motivoRifiuto(risposta.dati));
-    final sdp = (risposta.dati['sdp'] ?? '').toString();
-    if (!await firmaValida(chiave, 'risposta', idRemoto, ce.id, nonce, sdp, (risposta.dati[campo] ?? '').toString())) {
+    if (m.tipo == 'rifiuto') return _chiudi(_motivoRifiuto(m.dati));
+    String sdp;
+    try {
+      final corpo = (m.dati['corpo'] ?? '').toString();
+      if (m.tipo != 'risposta' || !await sp.sigilloValido('risposta', corpo, m.dati['sigillo']?.toString())) {
+        throw const FormatException('sigillo');
+      }
+      final r = jsonDecode(corpo) as Map<String, dynamic>;
+      sdp = r['sdp'].toString();
+      info['nome'] = (r['nome'] ?? '').toString();
+    } catch (_) {
       return _chiudi('Risposta non firmata: collegamento interrotto per sicurezza.');
     }
-    info['nome'] = risposta.dati['nome'] ?? '';
     _stato('Collegamento in corso…');
     await pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
     _passo('risposta applicata: ${RegExp('a=candidate').allMatches(sdp).length} indirizzi del computer');
@@ -201,6 +208,21 @@ class SessioneDesk extends ChangeNotifier {
       return _chiudi('Il telefono e il computer non riescono a collegarsi, nemmeno passando dal ponte. '
           'Controlla la connessione e riprova, per esempio con il Wi-Fi.');
     }
+  }
+
+  /// Il prossimo messaggio del computer per QUESTA chiamata (codice [n]): quelli di una chiamata di prima si buttano.
+  /// Un rifiuto senza codice viene da una tk-desk di prima e vale (dice che va aggiornata).
+  Future<Messaggio?> _prendi(String n, int secondi) async {
+    final limite = DateTime.now().add(Duration(seconds: secondi));
+    while (chiusa == null && DateTime.now().isBefore(limite)) {
+      for (final m in await ce.ricevi()) {
+        if (m.da != idRemoto) continue;
+        final suo = (m.dati['n'] ?? '').toString();
+        if (suo == n || (m.tipo == 'rifiuto' && suo.isEmpty)) return m;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+    }
+    return null;
   }
 
   void _messaggio(String testo) {
