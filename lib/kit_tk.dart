@@ -1296,10 +1296,24 @@ Future<Novita?> cercaNovita() async {
   return Novita(codice, '${dati['versionName']}', '${dati['apkUrl']}', '${dati['note'] ?? ''}');
 }
 
-/// Scarica l'APK e apre l'installazione del sistema.
+/// Da dove può arrivare l'APK: solo Dropbox in https (il manifest lo legge il sito, ma i file stanno lì).
+const _originiApk = {'dl.dropboxusercontent.com', 'www.dropbox.com', 'dropbox.com'};
+
+bool indirizzoApkAmmesso(String url) {
+  final u = Uri.tryParse(url);
+  return u != null && u.scheme == 'https' && _originiApk.contains(u.host.toLowerCase());
+}
+
+/// Controllo nativo (TkAggiornamento.kt, uguale in tutte le app): l'APK scaricato deve essere di QUESTA app
+/// e firmato con lo stesso certificato. Chi cambiasse il manifest non può far proporre un'altra app.
+const _canaleAggiornamento = MethodChannel('tk/aggiornamento');
+
+/// Scarica l'APK, lo verifica e apre l'installazione del sistema.
 Future<void> scaricaEInstalla(Novita novita, {void Function(double)? avanzamento}) async {
+  if (!indirizzoApkAmmesso(novita.apkUrl)) throw 'indirizzo dell\'aggiornamento non riconosciuto';
   final cartella = await getTemporaryDirectory();
-  final file = File('${cartella.path}/${configTk.nome}-${novita.versionName}.apk');
+  final versione = novita.versionName.replaceAll(RegExp(r'[^0-9A-Za-z.+-]'), '');
+  final file = File('${cartella.path}/${configTk.nome}-$versione.apk');
   final risposta = await http.Client().send(http.Request('GET', Uri.parse(novita.apkUrl)));
   if (risposta.statusCode != 200) throw 'Scaricamento non riuscito (${risposta.statusCode})';
   final totale = risposta.contentLength ?? 0;
@@ -1311,6 +1325,18 @@ Future<void> scaricaEInstalla(Novita novita, {void Function(double)? avanzamento
     if (totale > 0) avanzamento?.call(scaricati / totale);
   }
   await uscita.close();
+  bool nostro;
+  try {
+    nostro = await _canaleAggiornamento.invokeMethod<bool>('verificaApk', {'percorso': file.path}) ?? false;
+  } catch (_) {
+    nostro = false;
+  }
+  if (!nostro) {
+    try {
+      await file.delete();
+    } catch (_) {}
+    throw 'il file scaricato non è un aggiornamento firmato di ${configTk.nome}: non lo installo';
+  }
   final esito = await OpenFilex.open(file.path, type: 'application/vnd.android.package-archive');
   if (esito.type != ResultType.done) throw esito.message;
 }
