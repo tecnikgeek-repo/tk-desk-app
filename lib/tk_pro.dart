@@ -121,7 +121,7 @@ class PulsanteCaffe extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = proTk;
-    if (p == null) return const SizedBox.shrink();
+    if (p == null || tkPlay) return const SizedBox.shrink();
     return _BottoneColorato(
       testo: 'Offrimi un caffè',
       icona: Icons.coffee,
@@ -328,7 +328,7 @@ class _SchermataBenvenutoState extends State<SchermataBenvenuto> {
 /// primo avvio e poi al massimo una volta al mese (dopo almeno 10 aperture), mai dopo «Non mostrarlo più».
 Future<void> invitoCaffe(BuildContext context, {bool Function()? puoMostrare}) async {
   final p = proTk;
-  if (p == null) return;
+  if (p == null || tkPlay) return;
   final lic = p.lic;
   final avvii = ((lic.ricordo('caffe_avvii', 0) as num?) ?? 0).toInt() + 1;
   await lic.ricorda('caffe_avvii', avvii);

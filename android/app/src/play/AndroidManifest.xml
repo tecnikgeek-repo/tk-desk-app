@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Solo nella versione per il Play Store (TK_PLAY=1, vedi build.gradle.kts): gli aggiornamenti li fa Play,
+     quindi l'app non deve poter installare APK (Play lo permette solo a pochi tipi di app). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" tools:node="remove" />
+    <!-- li dichiara open_filex (serve solo per aprire l'APK degli aggiornamenti Dropbox): foto e file si scelgono
+         col selettore di Android (image_picker, file_picker), che non ha bisogno di permessi. Play accetta
+         l'accesso a tutte le foto e i video solo per le app che ne hanno davvero bisogno. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
+</manifest>

@@ -41,6 +41,10 @@ const gradienteTestata = LinearGradient(colors: [navy, navy2, navy3]);
 
 // ───────────────────────── configurazione dell'app ─────────────────────────
 
+/// Versione per il Play Store (`--dart-define=TK_PLAY=true`): niente aggiornamento da Dropbox (lo fa Play) e
+/// niente «Offrimi un caffè» (Play vuole i pagamenti dentro l'app solo con la sua fatturazione).
+const tkPlay = bool.fromEnvironment('TK_PLAY');
+
 class ConfigTk {
   const ConfigTk({
     required this.nome,
@@ -877,7 +881,7 @@ class _SchermataInformazioniState extends State<SchermataInformazioni> {
           const SizedBox(height: 16),
           for (final w in widget.extra?.call(context) ?? const <Widget>[]) ...[w, const SizedBox(height: 10)],
           // defaultTargetPlatform (non Platform): così il pulsante compare anche nelle foto dei test
-          if (defaultTargetPlatform == TargetPlatform.android) ...[
+          if (defaultTargetPlatform == TargetPlatform.android && !tkPlay) ...[
             BottoneTk(
                 testo: 'Controlla aggiornamenti',
                 icona: Icons.system_update,
@@ -892,7 +896,7 @@ class _SchermataInformazioniState extends State<SchermataInformazioni> {
               scuro: true,
               onTap: () => Navigator.of(context)
                   .push(MaterialPageRoute<void>(builder: (_) => SchermataLicenze(versione: _info?.version ?? '')))),
-          if (proTk != null) ...[const SizedBox(height: 10), const PulsanteCaffe()],
+          if (proTk != null && !tkPlay) ...[const SizedBox(height: 10), const PulsanteCaffe()],
           if (c.altrove != null) ...[
             const SizedBox(height: 10),
             BottoneTk(
@@ -1343,7 +1347,7 @@ Future<void> scaricaEInstalla(Novita novita, {void Function(double)? avanzamento
 
 /// Controlla e, se serve, propone l'aggiornamento (all'avvio in silenzio, da Informazioni con gli avvisi).
 Future<void> proponiAggiornamento(BuildContext context, {bool avvisaSeAggiornata = true}) async {
-  if (!Platform.isAndroid) return;
+  if (!Platform.isAndroid || tkPlay) return;
   Novita? novita;
   try {
     novita = await cercaNovita();
