@@ -1,0 +1,67 @@
+name: Play Store
+
+# Pacchetto .aab di tk-desk per il Play Store, solo ad avvio manuale (gh workflow run play.yml --ref <ramo>).
+# Stesso codice della versione Dropbox, compilato con TK_PLAY: niente aggiornamento da Dropbox, niente permesso
+# di installare APK, niente «Offrimi un caffè». Stessa chiave di firma: chi ha l'app da Dropbox si aggiorna da Play.
+# Il file va caricato nella Play Console (artefatto tkdesk-aab); qui non si pubblica niente.
+
+on:
+  # push sul ramo play: GitHub avvia a mano solo i workflow che stanno già su main
+  push:
+    branches: [play]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  aab:
+    runs-on: ubuntu-latest
+    env:
+      IMPRONTA_TKDESK: e294354deb7c9e49d4a9225c110c1d203cd59fd7bf9642e581d4df3d87bf37c7
+      TK_PLAY: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2, fissata al commit (ha accesso alla chiave di firma)
+        with:
+          flutter-version: '3.47.8'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test --dart-define=TK_PLAY=true
+
+      - name: Chiave di firma dal segreto
+        env:
+          CHIAVE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$CHIAVE_B64" ]; then echo "::error::Segreto ANDROID_KEYSTORE_B64 mancante"; exit 1; fi
+          printf '%s' "$CHIAVE_B64" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/tk.keystore"
+          echo "ANDROID_KEYSTORE=$RUNNER_TEMP/tk.keystore" >> "$GITHUB_ENV"
+
+      - run: flutter build appbundle --release --dart-define=TK_PLAY=true --target-platform android-arm,android-arm64
+
+      - name: Controlli del pacchetto
+        run: |
+          AAB=build/app/outputs/bundle/release/app-release.aab
+          keytool -printcert -jarfile "$AAB" | tee firma.txt
+          TROVATA=$(grep -m1 'SHA256:' firma.txt | awk '{print $2}' | tr -d ':' | tr 'A-F' 'a-f')
+          if [ "$TROVATA" != "$IMPRONTA_TKDESK" ]; then echo "::error::Il pacchetto non è firmato con la chiave di tk-desk"; exit 1; fi
+          echo "Firma giusta: è la chiave di tk-desk"
+          unzip -p "$AAB" base/manifest/AndroidManifest.xml > manifest.pb
+          if grep -q REQUEST_INSTALL_PACKAGES manifest.pb; then echo "::error::Il permesso di installare APK è ancora nel pacchetto"; exit 1; fi
+          echo "Permesso di installare APK assente"
+          if grep -qE 'READ_MEDIA_(IMAGES|VIDEO|AUDIO)|READ_EXTERNAL_STORAGE' manifest.pb; then echo "::error::Permessi su foto e video ancora nel pacchetto (Play li vuole solo per le gallerie)"; exit 1; fi
+          echo "Permessi su foto, video e audio assenti"
+          python3 tools/controlla_16kb.py "$AAB"
+          VERSIONE=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' \r')
+          mkdir -p dist && cp "$AAB" "dist/tk-desk-${VERSIONE%%+*}-play.aab"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tkdesk-aab
+          path: dist/*.aab
+          retention-days: 14

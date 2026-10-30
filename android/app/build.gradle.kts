@@ -43,6 +43,12 @@ android {
         }
     }
 
+    // versione per il Play Store (play.yml, TK_PLAY=1): il manifest di src/play toglie il permesso di installare APK.
+    // Stesso pacchetto e stessa chiave: chi ha l'app da Dropbox si aggiorna da Play senza disinstallare.
+    if (System.getenv("TK_PLAY") == "1") {
+        sourceSets.getByName("release").manifest.srcFile("src/play/AndroidManifest.xml")
+    }
+
     buildTypes {
         release {
             signingConfig = signingConfigs.findByName("tk") ?: signingConfigs.getByName("debug")
