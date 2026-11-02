@@ -1,0 +1,54 @@
+name: Prova iOS
+
+# Apre l'app sul simulatore iPhone: controlla che parta e fotografa la prima schermata. Non carica niente su Apple.
+
+on:
+  push:
+    branches: [ios-prova]
+
+permissions:
+  contents: read
+
+jobs:
+  simulatore:
+    runs-on: macos-26-intel
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2, fissata al commit
+        with:
+          flutter-version: '3.47.8'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build ios --simulator --debug --dart-define=TK_PLAY=true
+
+      - name: Avvio sul simulatore
+        run: |
+          mkdir -p prova
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)['devices']
+          r=sorted([k for k in d if 'iOS' in k])[-1]
+          print([x['udid'] for x in d[r] if 'Pro Max' in x['name']][-1])")
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b >/dev/null
+          APP=build/ios/iphonesimulator/Runner.app
+          BID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" "$BID" | tee prova/avvio.txt
+          for s in 15 30 60; do
+            sleep $([ $s = 15 ] && echo 15 || echo 20)
+            xcrun simctl io "$UDID" screenshot "prova/dopo-$s.png"
+          done
+          sleep 5
+          xcrun simctl spawn "$UDID" launchctl list | grep "UIKitApplication:$BID" | tee prova/processo.txt || true
+          cp ~/Library/Logs/DiagnosticReports/Runner* prova/ 2>/dev/null || true
+          xcrun simctl spawn "$UDID" log show --last 2m --predicate 'process == "Runner"' --style compact 2>/dev/null | grep -iE "error|fault|exception|not found|MissingPlugin" | tail -40 > prova/errori.txt || true
+          if [ ! -s prova/processo.txt ]; then echo "::error::L'app non è più in esecuzione"; exit 1; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prova-ios
+          path: prova/
+          retention-days: 14
