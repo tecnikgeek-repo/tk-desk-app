@@ -1,0 +1,75 @@
+name: App Store
+
+# Pacchetto iOS caricato su TestFlight con la chiave API di App Store Connect (firma gestita da Apple).
+# Stesso codice della versione Play, compilato con TK_PLAY: niente aggiornamento da Dropbox, niente «Offrimi un caffè».
+
+on:
+  # push sul ramo ios: GitHub avvia a mano solo i workflow che stanno già su main
+  push:
+    branches: [ios]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  testflight:
+    runs-on: macos-26-intel
+    timeout-minutes: 60
+    env:
+      SQUADRA: YQW3TEVL59
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2, fissata al commit
+        with:
+          flutter-version: '3.47.8'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+
+      - name: Chiave API dal segreto
+        env:
+          CHIAVE: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          if [ -z "$CHIAVE" ]; then echo "::error::Segreto ASC_KEY_P8 mancante"; exit 1; fi
+          printf '%s' "$CHIAVE" > "$RUNNER_TEMP/chiave.p8"
+          chmod 600 "$RUNNER_TEMP/chiave.p8"
+
+      - name: Configurazione del progetto
+        run: |
+          flutter build ios --config-only --no-codesign --release --dart-define=TK_PLAY=true
+          if [ -f ios/Podfile ]; then (cd ios && pod install --repo-update); fi
+
+      - name: Archivio firmato
+        env:
+          KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ISSUER: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Release \
+            -destination generic/platform=iOS -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/chiave.p8" -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER" \
+            DEVELOPMENT_TEAM="$SQUADRA" CODE_SIGN_STYLE=Automatic archive | tail -40
+          test -d "$RUNNER_TEMP/app.xcarchive"
+
+      - name: Caricamento su TestFlight
+        env:
+          KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ISSUER: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          cat > "$RUNNER_TEMP/esporta.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$SQUADRA</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>uploadSymbols</key><true/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/esporta.plist" -exportPath "$RUNNER_TEMP/esportato" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/chiave.p8" -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER"
