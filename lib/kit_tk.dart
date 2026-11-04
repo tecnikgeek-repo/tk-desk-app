@@ -4,6 +4,7 @@
 // Contiene: palette, tema, testata, card, pillole, bottoni, dialoghi, splash, Informazioni (software libero
 // AGPL-3.0, privacy, licenze e codice sorgente) e aggiornamenti.
 // Copyright (C) 2026 Pietro De Filippis (TecnikGeek) — AGPL-3.0-or-later, vedi COPYING
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' show Random;
@@ -44,6 +45,29 @@ const gradienteTestata = LinearGradient(colors: [navy, navy2, navy3]);
 /// Versione per il Play Store (`--dart-define=TK_PLAY=true`): niente aggiornamento da Dropbox (lo fa Play) e
 /// niente «Offrimi un caffè» (Play vuole i pagamenti dentro l'app solo con la sua fatturazione).
 const tkPlay = bool.fromEnvironment('TK_PLAY');
+
+/// Perché non è riuscito, in parole semplici. Il testo tecnico dell'errore NON va mai a schermo (regola per tutte
+/// le app TK). Solo i messaggi scritti da noi, lanciati come String (`throw 'Password errata'`), passano così come sono.
+String motivoErrore(Object errore) {
+  if (errore is String) return errore;
+  if (errore is FileSystemException && errore.osError?.errorCode == 28) {
+    return 'Lo spazio sul telefono è finito: liberane un po\' e riprova.';
+  }
+  if (errore is SocketException ||
+      errore is TimeoutException ||
+      errore is HandshakeException ||
+      errore is http.ClientException) {
+    return 'Controlla la connessione a Internet e riprova.';
+  }
+  return 'Riprova: se succede ancora, chiudi e riapri l\'app.';
+}
+
+/// La frase da mostrare quando qualcosa va storto: [cosa] dice cosa non è riuscito, il dettaglio va solo nel registro.
+String fraseErrore(String cosa, Object errore) {
+  debugPrint('$cosa $errore');
+  final motivo = motivoErrore(errore);
+  return '$cosa ${motivo[0].toUpperCase()}${motivo.substring(1)}';
+}
 
 class ConfigTk {
   const ConfigTk({
@@ -1293,7 +1317,7 @@ Future<Novita?> cercaNovita() async {
   risposta ??= await http
       .get(Uri.parse('${configTk.manifestUrl}&t=$t'))
       .timeout(const Duration(seconds: 20));
-  if (risposta.statusCode != 200) throw 'Il server ha risposto ${risposta.statusCode}';
+  if (risposta.statusCode != 200) throw 'Il server degli aggiornamenti non è disponibile: riprova più tardi.';
   final dati = jsonDecode(risposta.body) as Map<String, dynamic>;
   final codice = (dati['versionCode'] as num).toInt();
   if (codice <= attuale) return null;
@@ -1319,7 +1343,7 @@ Future<void> scaricaEInstalla(Novita novita, {void Function(double)? avanzamento
   final versione = novita.versionName.replaceAll(RegExp(r'[^0-9A-Za-z.+-]'), '');
   final file = File('${cartella.path}/${configTk.nome}-$versione.apk');
   final risposta = await http.Client().send(http.Request('GET', Uri.parse(novita.apkUrl)));
-  if (risposta.statusCode != 200) throw 'Scaricamento non riuscito (${risposta.statusCode})';
+  if (risposta.statusCode != 200) throw 'Il file dell\'aggiornamento non si scarica: riprova più tardi.';
   final totale = risposta.contentLength ?? 0;
   var scaricati = 0;
   final uscita = file.openWrite();
@@ -1342,7 +1366,7 @@ Future<void> scaricaEInstalla(Novita novita, {void Function(double)? avanzamento
     throw 'il file scaricato non è un aggiornamento firmato di ${configTk.nome}: non lo installo';
   }
   final esito = await OpenFilex.open(file.path, type: 'application/vnd.android.package-archive');
-  if (esito.type != ResultType.done) throw esito.message;
+  if (esito.type != ResultType.done) throw 'Il telefono non riesce ad aprire l\'aggiornamento.';
 }
 
 /// Controlla e, se serve, propone l'aggiornamento (all'avvio in silenzio, da Informazioni con gli avvisi).
@@ -1352,7 +1376,7 @@ Future<void> proponiAggiornamento(BuildContext context, {bool avvisaSeAggiornata
   try {
     novita = await cercaNovita();
   } catch (errore) {
-    if (context.mounted && avvisaSeAggiornata) avviso(context, 'Controllo non riuscito: $errore');
+    if (context.mounted && avvisaSeAggiornata) avviso(context, fraseErrore('Non sono riuscito a controllare gli aggiornamenti.', errore));
     return;
   }
   if (!context.mounted) return;
@@ -1396,7 +1420,7 @@ Future<void> proponiAggiornamento(BuildContext context, {bool avvisaSeAggiornata
   } catch (errore) {
     if (context.mounted) {
       Navigator.of(context).pop();
-      avviso(context, 'Aggiornamento non riuscito: $errore');
+      avviso(context, fraseErrore('Aggiornamento non riuscito.', errore));
     }
   }
 }

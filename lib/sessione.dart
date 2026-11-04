@@ -12,6 +12,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import 'centralino.dart';
 import 'pake.dart';
+import 'kit_tk.dart';
 
 const _stun = [
   {'urls': 'stun:stun.l.google.com:19302'},
@@ -95,7 +96,7 @@ class SessioneDesk extends ChangeNotifier {
     } catch (e, st) {
       _passo('errore: $e');
       _passo(st.toString().split('\n').take(3).join(' | '));
-      await _chiudi('Collegamento non riuscito: $e');
+      await _chiudi(fraseErrore('Collegamento non riuscito.', e));
     }
   }
 
