@@ -486,10 +486,12 @@ class _SchermataSessioneState extends State<SchermataSessione> {
             ] else ...[
               Text(s.chiusa!, textAlign: TextAlign.center, style: const TextStyle(color: bianco, fontSize: 16, height: 1.4)),
               if (!_eraAperta && s.registro.isNotEmpty) ...[
-                const SizedBox(height: 14),
-                // i passi del collegamento: una foto di questo basta per capire dove si è fermato
-                Text(s.registro.join('\n'),
-                    textAlign: TextAlign.left, style: const TextStyle(color: grigio400, fontSize: 10.5, height: 1.35)),
+                const SizedBox(height: 8),
+                // i passi del collegamento servono all'assistenza: si copiano, a schermo non vanno
+                TextButton(
+                  onPressed: () => Clipboard.setData(ClipboardData(text: s.registro.join('\n'))),
+                  child: const Text('Copia i dettagli per l\'assistenza'),
+                ),
               ],
               const SizedBox(height: 24),
               SizedBox(width: 240, child: BottoneTk(testo: 'Indietro', icona: Icons.arrow_back, onTap: () => Navigator.of(context).pop())),

@@ -95,7 +95,7 @@ class Centralino {
     try {
       j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     } catch (_) {
-      throw ErroreCentralino('Risposta del server non valida (${r.statusCode}).', 'risposta');
+      throw ErroreCentralino('Il server non risponde come dovrebbe: riprova tra poco.', 'risposta');
     }
     if (j['ok'] != true) throw ErroreCentralino((j['message'] ?? 'Errore del server.').toString(), (j['code'] ?? '').toString());
     return j;
