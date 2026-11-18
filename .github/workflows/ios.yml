@@ -121,7 +121,7 @@ jobs:
 
   revisione:
     needs: [controlla, testflight]
-    if: ${{ !cancelled() && needs.controlla.result == 'success' && needs.testflight.result != 'failure' }}
+    if: ${{ !cancelled() && needs.controlla.result == 'success' && (needs.testflight.result == 'success' || needs.testflight.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
