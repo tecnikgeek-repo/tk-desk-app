@@ -4,16 +4,46 @@ name: App Store
 # Stesso codice della versione Play, compilato con TK_PLAY: niente aggiornamento da Dropbox, niente «Offrimi un caffè».
 
 on:
-  # push sul ramo ios: GitHub avvia a mano solo i workflow che stanno già su main
+  # ogni push su main: lo store riceve qualcosa solo se il numero di versione in pubspec.yaml è nuovo
   push:
-    branches: [ios]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: app-store
+  cancel-in-progress: false
+
 jobs:
+  controlla:
+    runs-on: ubuntu-latest
+    outputs:
+      serve: ${{ steps.c.outputs.serve }}
+      versione: ${{ steps.c.outputs.versione }}
+      build: ${{ steps.c.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: c
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          git clone -q --depth 1 https://github.com/tecnikgeek-repo/tk-app-store "$RUNNER_TEMP/tk-app-store"
+          pip install -q pyjwt cryptography
+          V=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: //' | tr -d '[:space:]')
+          echo "versione=${V%%+*}" >> "$GITHUB_OUTPUT"; echo "build=${V##*+}" >> "$GITHUB_OUTPUT"
+          if python3 "$RUNNER_TEMP/tk-app-store/ios_invia.py" --serve 6829889038 "${V##*+}"; then
+            echo "serve=true" >> "$GITHUB_OUTPUT"; echo "Build ${V##*+} da compilare"
+          else
+            echo "serve=false" >> "$GITHUB_OUTPUT"; echo "Build ${V##*+} già su App Store Connect: niente Mac"
+          fi
+
   testflight:
+    needs: controlla
+    if: needs.controlla.outputs.serve == 'true'
     runs-on: macos-26-intel
     timeout-minutes: 60
     env:
@@ -88,3 +118,23 @@ jobs:
             -exportOptionsPlist "$RUNNER_TEMP/esporta.plist" -exportPath "$RUNNER_TEMP/esportato" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/chiave.p8" -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER"
+
+  revisione:
+    needs: [controlla, testflight]
+    if: ${{ !cancelled() && needs.controlla.result == 'success' && needs.testflight.result != 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # storia completa: le «Novità» vengono dai commit
+      - name: Revisione App Store
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          git clone -q --depth 1 https://github.com/tecnikgeek-repo/tk-app-store "$RUNNER_TEMP/tk-app-store"
+          pip install -q pyjwt cryptography
+          NOTE=$(python3 "$RUNNER_TEMP/tk-app-store/note.py" 4000)
+          python3 "$RUNNER_TEMP/tk-app-store/ios_invia.py" 6829889038 "${{ needs.controlla.outputs.versione }}" "${{ needs.controlla.outputs.build }}" "$NOTE"

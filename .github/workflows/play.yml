@@ -1,18 +1,22 @@
 name: Play Store
 
-# Pacchetto .aab di tk-desk per il Play Store, solo ad avvio manuale (gh workflow run play.yml --ref <ramo>).
+# Pacchetto .aab di tk-desk per il Play Store, a ogni push su main.
 # Stesso codice della versione Dropbox, compilato con TK_PLAY: niente aggiornamento da Dropbox, niente permesso
 # di installare APK, niente «Offrimi un caffè». Stessa chiave di firma: chi ha l'app da Dropbox si aggiorna da Play.
-# Il file va caricato nella Play Console (artefatto tkdesk-aab); qui non si pubblica niente.
+# Il pacchetto parte da solo per Google Play (play_carica.py di tecnikgeek-repo/tk-app-store) se la versione è nuova.
 
 on:
-  # push sul ramo play: GitHub avvia a mano solo i workflow che stanno già su main
+  # ogni push su main: lo store riceve qualcosa solo se il numero di versione in pubspec.yaml è nuovo
   push:
-    branches: [play]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: play-store
+  cancel-in-progress: false
 
 jobs:
   aab:
@@ -22,6 +26,8 @@ jobs:
       TK_PLAY: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # storia completa: le note di rilascio vengono dai commit
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -65,3 +71,14 @@ jobs:
           name: tkdesk-aab
           path: dist/*.aab
           retention-days: 14
+
+      - name: Pubblicazione su Google Play
+        env:
+          PLAY_JSON: ${{ secrets.PLAY_JSON }}
+        run: |
+          if [ -z "$PLAY_JSON" ]; then echo "::error::Segreto PLAY_JSON mancante"; exit 1; fi
+          git clone -q --depth 1 https://github.com/tecnikgeek-repo/tk-app-store "$RUNNER_TEMP/tk-app-store"
+          pip install -q pyjwt cryptography
+          VERSIONE=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: //' | tr -d '[:space:]')
+          NOTE=$(python3 "$RUNNER_TEMP/tk-app-store/note.py" 500)
+          TK_VERSIONE="${VERSIONE%%+*}" python3 "$RUNNER_TEMP/tk-app-store/play_carica.py" it.pietrodefilippis.tkdesk dist/*.aab "$NOTE"
